@@ -28,6 +28,7 @@ HYPT=2082 VLRT=2083 bash <(curl -Ls https://raw.githubusercontent.com/walx0705/s
 | SUBPT | 订阅服务端口，生成 http://地址:端口/sub/令牌 的订阅链接 |
 | REPORT | 上报 webhook，安装完成后 POST 节点链接 |
 | NZ_SERVER / NZ_KEY | 哪吒面板地址与探针密钥，都填才装 nezha-agent；NZ_TLS=1 时探针走 TLS |
+| NZ_VER | 哪吒版本：v1 新版面板（默认，配置文件模式）/ v0 旧版面板（参数模式，自动取最新 v0 探针） |
 | ADDR | 服务器地址（链接用，默认自动取公网 IP） |
 | SNI | 自签证书名，默认 www.bing.com |
 | RSNI | Reality 目标站，默认 www.microsoft.com |

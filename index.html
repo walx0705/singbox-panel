@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>singbox · 节点命令面板</title>
+<style>
+  :root{
+    --bg:#0d1526; --panel:#131f38; --panel2:#0f1930; --border:#24365c;
+    --text:#e8eefc; --muted:#8fa3c8; --green:#22c55e; --green-d:#14532d;
+    --chip:#1b2b4d; --input:#0b1428;
+  }
+  body.light{
+    --bg:#eef2f9; --panel:#ffffff; --panel2:#f4f7fd; --border:#d3ddf0;
+    --text:#16233f; --muted:#5b6f96; --chip:#e6edfb; --input:#f7fafd;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--text); font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; min-height:100vh;}
+  header{display:flex; align-items:center; gap:12px; padding:14px 20px; flex-wrap:wrap;}
+  header h1{font-size:22px; font-weight:700;}
+  .ver{background:var(--green-d); color:#4ade80; border:1px solid var(--green); font-size:12px; padding:2px 8px; border-radius:6px;}
+  body.light .ver{color:#15803d;}
+  header .spacer{flex:1;}
+  .hbtn{background:var(--panel); border:1px solid var(--border); color:var(--text); padding:8px 14px; border-radius:8px; font-size:14px; cursor:pointer; text-decoration:none;}
+  .hbtn.green{background:#15803d; border-color:#16a34a; color:#fff;}
+  .layout{display:flex; gap:16px; padding:0 20px 30px; align-items:flex-start;}
+  nav{width:210px; flex:none; display:flex; flex-direction:column; gap:10px; position:sticky; top:14px;}
+  nav a{display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--border); color:var(--text); text-decoration:none; padding:13px 14px; border-radius:10px; font-size:15px;}
+  nav a .n{background:var(--green); color:#06280f; font-weight:700; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; flex:none;}
+  main{flex:1; min-width:0; display:flex; flex-direction:column; gap:16px;}
+  .card{background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:18px;}
+  .card h2{font-size:18px; margin-bottom:14px; display:flex; align-items:center; gap:10px;}
+  .tag{font-size:12px; background:var(--chip); color:var(--muted); padding:2px 8px; border-radius:6px;}
+  .row{display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:12px;}
+  .row label{color:var(--muted); font-size:14px;}
+  select,input[type=text]{background:var(--input); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:9px 12px; font-size:14px;}
+  .btn{border:1px solid var(--border); background:var(--panel2); color:var(--text); padding:9px 16px; border-radius:8px; font-size:14px; cursor:pointer;}
+  .btn.green{background:#16a34a; border-color:#16a34a; color:#fff; font-weight:600;}
+  pre.cmd{background:#0a1122; color:#dbeafe; border:1px solid var(--border); border-radius:10px; padding:16px; font-size:14px; line-height:1.6; white-space:pre-wrap; word-break:break-all; min-height:56px;}
+  body.light pre.cmd{background:#0d1526; color:#dbeafe;}
+  .chips{display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;}
+  .chip{background:var(--chip); border:1px solid var(--border); color:var(--muted); padding:5px 12px; border-radius:999px; font-size:13px;}
+  .chip.on{color:#4ade80; border-color:var(--green);}
+  body.light .chip.on{color:#15803d;}
+  .chip.act{color:#fbbf24; border-color:#b45309;}
+  .hint{color:var(--muted); font-size:13px; margin-top:10px; line-height:1.6;}
+  .warn{color:#f59e0b; font-size:13px; margin-top:12px; line-height:1.6;}
+  details.card summary{cursor:pointer; font-size:18px; font-weight:700; list-style:none;}
+  details.card summary::-webkit-details-marker{display:none;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-top:14px;}
+  .field label{display:block; color:var(--muted); font-size:13px; margin-bottom:6px;}
+  .field input{width:100%;}
+  .proto-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px;}
+  .proto{background:var(--panel2); border:1px solid var(--border); border-radius:12px; padding:16px;}
+  .proto .ph{display:flex; align-items:center; gap:8px; margin-bottom:12px;}
+  .proto .ph b{font-size:16px;}
+  .proto .var{font-size:12px; background:#14532d; color:#4ade80; padding:2px 7px; border-radius:5px; font-family:monospace;}
+  .proto .prow{display:flex; gap:8px;}
+  .proto input{flex:1; min-width:0;}
+  .dice{flex:none; width:42px; font-size:17px; background:var(--chip); border:1px solid var(--border); color:var(--text); border-radius:8px; cursor:pointer;}
+  .seg{display:flex; gap:8px; flex-wrap:wrap;}
+  .seg button{background:var(--panel2); border:1px solid var(--border); color:var(--text); padding:9px 18px; border-radius:8px; font-size:14px; cursor:pointer;}
+  .seg button.on{background:#16a34a; border-color:#16a34a; color:#fff; font-weight:600;}
+  footer{color:var(--muted); font-size:13px; text-align:center; padding:0 20px 26px; line-height:1.7;}
+  @media (max-width:760px){
+    .layout{flex-direction:column;}
+    nav{width:100%; flex-direction:row; overflow-x:auto; position:static; padding-bottom:4px;}
+    nav a{white-space:nowrap;}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>singbox--节点命令面板</h1>
+  <span class="ver">v1.0.0</span>
+  <div class="spacer"></div>
+  <a class="hbtn green" href="https://github.com/walx0705/singbox-panel" target="_blank" rel="noopener">📦 sb.sh 一键脚本仓库</a>
+  <button class="hbtn" id="themeBtn">☀️ 浅色</button>
+</header>
+
+<div class="layout">
+  <nav>
+    <a href="#cmd"><span class="n">1</span>节点命令</a>
+    <a href="#global"><span class="n">2</span>全局配置</a>
+    <a href="#proto"><span class="n">3</span>直连协议</a>
+    <a href="#action"><span class="n">4</span>安装动作</a>
+  </nav>
+
+  <main>
+    <!-- ① 命令 -->
+    <section class="card" id="cmd">
+      <h2>生成的 SSH 一键命令 <span class="tag">sb.sh</span></h2>
+      <div class="row">
+        <label>下载方式</label>
+        <select id="dl">
+          <option value="curl">curl</option>
+          <option value="wget">wget</option>
+        </select>
+        <label>换行方式</label>
+        <select id="mode">
+          <option value="single">单行（推荐，粘贴不易出错）</option>
+          <option value="multi">多行（每行一个变量便于核对）</option>
+        </select>
+        <button class="btn green" id="copyBtn">📋 复制命令</button>
+        <button class="btn" id="resetBtn">♻️ 重置表单</button>
+      </div>
+      <pre class="cmd" id="cmdBox"></pre>
+      <div style="margin-top:14px; color:var(--muted); font-size:14px;">已选择节点类型</div>
+      <div class="chips" id="chips"></div>
+      <p class="hint">多行模式每行一个变量便于核对，但粘贴时若终端吞换行，行尾的 \ 会失效导致命令报错；拿不准就用单行。</p>
+    </section>
+
+    <!-- ② 全局配置 -->
+    <details class="card" id="global">
+      <summary>② 全局配置 <span class="tag" style="font-weight:400;">可留空走默认，点击展开</span></summary>
+      <div class="grid">
+        <div class="field"><label>服务器地址 ADDR（链接用，留空自动取公网 IP）</label><input type="text" id="ADDR" placeholder="如 sg-sgp04.altare.global"></div>
+        <div class="field"><label>自签证书 SNI（HY2 / TUIC / AnyTLS，默认 www.bing.com）</label><input type="text" id="SNI" placeholder="www.bing.com"></div>
+        <div class="field"><label>Reality 目标站 RSNI（默认 www.microsoft.com）</label><input type="text" id="RSNI" placeholder="www.microsoft.com"></div>
+        <div class="field"><label>UUID（留空自动生成并保存）</label><input type="text" id="UUID" placeholder="自动生成"></div>
+        <div class="field"><label>HY2 密码 HPWD（留空自动生成并保存）</label><input type="text" id="HPWD" placeholder="自动生成"></div>
+      </div>
+      <p class="warn">⚠️ SNI 安全提示：不要使用 Cloudflare / Akamai 等代理或 CDN 域名作为 SNI，否则端口被扫描会被论为无限制流量转发端口。不确定就留空（内置默认值）。</p>
+    </details>
+
+    <!-- ③ 直连协议 -->
+    <section class="card" id="proto">
+      <h2>③ 直连协议与端口</h2>
+      <p class="hint" style="margin:0 0 14px;">填写端口即启用该协议，留空则不用。可自由组合，一台机器一个 sing-box 同时跑。</p>
+      <div class="proto-grid">
+        <div class="proto">
+          <div class="ph"><b>Hysteria2</b><span class="var">HYPT</span></div>
+          <div class="prow"><input type="text" inputmode="numeric" id="HYPT" placeholder="如 2082，或点 🎲 随机"><button class="dice" data-for="HYPT">🎲</button></div>
+        </div>
+        <div class="proto">
+          <div class="ph"><b>Vless-Reality</b><span class="var">VLRT</span></div>
+          <div class="prow"><input type="text" inputmode="numeric" id="VLRT" placeholder="如 2083，或点 🎲 随机"><button class="dice" data-for="VLRT">🎲</button></div>
+        </div>
+        <div class="proto">
+          <div class="ph"><b>Tuic</b><span class="var">TUPT</span></div>
+          <div class="prow"><input type="text" inputmode="numeric" id="TUPT" placeholder="如 2082，或点 🎲 随机"><button class="dice" data-for="TUPT">🎲</button></div>
+        </div>
+        <div class="proto">
+          <div class="ph"><b>AnyTLS</b><span class="var">ANYPT</span></div>
+          <div class="prow"><input type="text" inputmode="numeric" id="ANYPT" placeholder="如 2082，或点 🎲 随机"><button class="dice" data-for="ANYPT">🎲</button></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ④ 安装动作 -->
+    <section class="card" id="action">
+      <h2>④ 安装动作</h2>
+      <div class="seg" id="actions">
+        <button data-act="install" class="on">安装 install</button>
+        <button data-act="rep">重装/改配置 rep</button>
+        <button data-act="list">查看链接 list</button>
+        <button data-act="status">状态 status</button>
+        <button data-act="restart">重启 restart</button>
+        <button data-act="stop">停止 stop</button>
+        <button data-act="del">卸载 del</button>
+      </div>
+      <p class="hint">install 与 rep 的区别：rep 会按当前表单的端口重组配置，但密码 / UUID / Reality 密钥沿用机器上已保存的，不会把已导入的客户端弄失效。list / status / stop / del 不需要填端口。</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  命令指向自己的仓库脚本 sb.sh（数据存目标机 ~/sb-node，日志 sing-box.log）。脚本不内置任何密码，密码与密钥都在目标机器上生成并保存。<br>
+  有 systemd 的机器用 systemd 托管；无 systemd 的沙盒（如 Altare）自动用 nohup 托管，重启后跑一次 install 或 start 即可恢复。
+</footer>
+
+<script>
+  var RAW = "https://raw.githubusercontent.com/walx0705/singbox-panel/main/sb.sh";
+  var VAR_ORDER = ["HYPT","VLRT","TUPT","ANYPT","ADDR","SNI","RSNI","UUID","HPWD"];
+  var PROTO_NAMES = {HYPT:"Hysteria2", VLRT:"VLESS-Reality", TUPT:"TUIC", ANYPT:"AnyTLS"};
+  var action = "install";
+
+  function val(id){ return document.getElementById(id).value.trim(); }
+
+  function build(){
+    var vars = [];
+    VAR_ORDER.forEach(function(k){
+      var v = val(k);
+      if(v) vars.push(k + "=" + v);
+    });
+    var dlCmd = document.getElementById("dl").value === "wget"
+      ? "bash <(wget -qO- " + RAW + ") " + action
+      : "bash <(curl -Ls " + RAW + ") " + action;
+    var out;
+    if(document.getElementById("mode").value === "multi" && vars.length){
+      out = vars.join(" \\\n") + " \\\n" + dlCmd;
+    }else{
+      out = (vars.length ? vars.join(" ") + " " : "") + dlCmd;
+    }
+    document.getElementById("cmdBox").textContent = out;
+
+    var chips = "";
+    ["HYPT","VLRT","TUPT","ANYPT"].forEach(function(k){
+      var on = !!val(k);
+      chips += '<span class="chip' + (on ? " on" : "") + '">' + (on ? "✓ " : "") + PROTO_NAMES[k] + (on ? "" : " 关") + "</span>";
+    });
+    chips += '<span class="chip act">动作 ' + action + "</span>";
+    document.getElementById("chips").innerHTML = chips;
+  }
+
+  VAR_ORDER.forEach(function(id){
+    document.getElementById(id).addEventListener("input", build);
+  });
+  document.getElementById("dl").addEventListener("change", build);
+  document.getElementById("mode").addEventListener("change", build);
+
+  document.querySelectorAll(".dice").forEach(function(b){
+    b.addEventListener("click", function(){
+      var el = document.getElementById(b.getAttribute("data-for"));
+      el.value = Math.floor(10000 + Math.random() * 50000);
+      build();
+    });
+  });
+
+  document.querySelectorAll("#actions button").forEach(function(b){
+    b.addEventListener("click", function(){
+      document.querySelectorAll("#actions button").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      action = b.getAttribute("data-act");
+      build();
+    });
+  });
+
+  document.getElementById("copyBtn").addEventListener("click", function(){
+    var t = document.getElementById("cmdBox").textContent;
+    var done = function(){ document.getElementById("copyBtn").textContent = "✅ 已复制"; setTimeout(function(){ document.getElementById("copyBtn").textContent = "📋 复制命令"; }, 1600); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(done).catch(function(){ fallback(); });
+    }else{ fallback(); }
+    function fallback(){
+      var ta = document.createElement("textarea");
+      ta.value = t; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand("copy"); done(); }catch(e){}
+      document.body.removeChild(ta);
+    }
+  });
+
+  document.getElementById("resetBtn").addEventListener("click", function(){
+    VAR_ORDER.forEach(function(id){ document.getElementById(id).value = ""; });
+    build();
+  });
+
+  document.getElementById("themeBtn").addEventListener("click", function(){
+    document.body.classList.toggle("light");
+    this.textContent = document.body.classList.contains("light") ? "🌙 深色" : "☀️ 浅色";
+  });
+
+  build();
+</script>
+</body>
+</html>

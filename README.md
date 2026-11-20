@@ -22,6 +22,11 @@ HYPT=2082 VLRT=2083 bash <(curl -Ls https://raw.githubusercontent.com/walx0705/s
 | VLRT | VLESS-Reality 端口 |
 | TUPT | TUIC 端口 |
 | ANYPT | AnyTLS 端口 |
+| WSCDN | VLESS+WS+TLS 端口（WSDOMAIN 可填 CDN 域名） |
+| SOCKPT | Socks5 端口（SOCKUSER / SOCKPWD 账号密码） |
+| ARGO | 填 1 启用 Argo 隧道；ARGOTOKEN 固定隧道令牌（留空 = 临时隧道），ARGODOMAIN 固定隧道域名 |
+| SUBPT | 订阅服务端口，生成 http://地址:端口/sub/令牌 的订阅链接 |
+| REPORT | 上报 webhook，安装完成后 POST 节点链接 |
 | ADDR | 服务器地址（链接用，默认自动取公网 IP） |
 | SNI | 自签证书名，默认 www.bing.com |
 | RSNI | Reality 目标站，默认 www.microsoft.com |

@@ -27,6 +27,7 @@ HYPT=2082 VLRT=2083 bash <(curl -Ls https://raw.githubusercontent.com/walx0705/s
 | ARGO | 填 1 启用 Argo 隧道；ARGOTOKEN 固定隧道令牌（留空 = 临时隧道），ARGODOMAIN 固定隧道域名 |
 | SUBPT | 订阅服务端口，生成 http://地址:端口/sub/令牌 的订阅链接 |
 | REPORT | 上报 webhook，安装完成后 POST 节点链接 |
+| NZ_SERVER / NZ_KEY | 哪吒面板地址与探针密钥，都填才装 nezha-agent；NZ_TLS=1 时探针走 TLS |
 | ADDR | 服务器地址（链接用，默认自动取公网 IP） |
 | SNI | 自签证书名，默认 www.bing.com |
 | RSNI | Reality 目标站，默认 www.microsoft.com |

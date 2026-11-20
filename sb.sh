@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 # ============================================================
-# sb.sh —— sing-box 多协议一键脚本（配合图形面板生成命令使用）
+# sb.sh v1.1 —— sing-box 多协议一键脚本（配合图形面板拼命令使用）
 # 用法：HYPT=2082 VLRT=2083 bash <(curl -sL <地址>/sb.sh) install
 #
-# 环境变量（留空=不启用该协议）：
-#   HYPT   Hysteria2 端口        VLRT  VLESS-Reality 端口
-#   TUPT   TUIC 端口             ANYPT AnyTLS 端口
-#   ADDR   服务器地址（链接用，默认自动取公网 IP）
-#   SNI    自签证书名（HY2/TUIC/AnyTLS 用，默认 www.bing.com）
-#   RSNI   Reality 目标站（默认 www.microsoft.com）
-#   UUID   指定 UUID（默认生成并保存）
-#   HPWD   HY2 密码（默认生成并保存）
-#   TPWD   TUIC 密码（默认生成并保存）
-#   APWD   AnyTLS 密码（默认生成并保存）
-# 动作（第一个参数）：install（默认） rep list start stop restart status del
-# 数据目录：$SB_DIR（默认 ~/sb-node），含配置、证书、密钥、链接、日志。
+# 协议开关（留空=不启用）：
+#   直连：HYPT Hysteria2 | VLRT VLESS-Reality | TUPT TUIC | ANYPT AnyTLS
+#   WSCDN  VLESS+WS+TLS 端口（可套 CDN；WSDOMAIN 可填 CDN 域名）
+#   SOCKPT Socks5 端口（SOCKUSER / SOCKPWD 可指定账号密码）
+#   ARGO   填 1 启用 Argo 隧道（ARGOTOKEN 固定隧道令牌，留空=临时隧道）
+#   SUBPT  订阅服务端口（生成 http://地址:端口/sub/令牌 的订阅链接）
+#   REPORT 上报地址（安装完成后把节点链接 POST 到这个 webhook）
+# 通用：ADDR 服务器地址 | SNI 自签证书名 | RSNI Reality 目标站
+#       UUID / HPWD / TPWD / APWD 指定凭据（默认生成并保存）
+# 动作：install（默认） rep list start stop restart status del
+# 数据目录：$SB_DIR（默认 ~/sb-node）
 # ============================================================
 
 SB_DIR="${SB_DIR:-$HOME/sb-node}"
 SB_BIN="$SB_DIR/sing-box"
+CF_BIN="$SB_DIR/cloudflared"
 SB_VERSION_PIN="1.14.4"
 ACTION="${1:-install}"
+ARGO_LOCAL_PORT=18001
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 info() { echo -e "${BLUE}[信息]${NC} $*"; }
@@ -29,7 +30,6 @@ warn() { echo -e "${YELLOW}[注意]${NC} $*"; }
 err()  { echo -e "${RED}[错误]${NC} $*"; }
 
 has_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; }
-
 urlencode() { echo -n "$1" | sed -e 's/+/%2B/g' -e 's/\//%2F/g' -e 's/=/%3D/g'; }
 
 public_ip() {
@@ -39,7 +39,7 @@ public_ip() {
   echo "$ip" | tr -d ' \n'
 }
 
-# ---------- 密钥/密码（生成后存 secrets，rep 时复用） ----------
+# ---------- 凭据持久化 ----------
 SECRETS="$SB_DIR/secrets"
 sec_get() { [ -f "$SECRETS" ] && grep "^$1=" "$SECRETS" | head -1 | cut -d= -f2-; }
 sec_set() {
@@ -52,17 +52,21 @@ sec_set() {
 prepare_secrets() {
   mkdir -p "$SB_DIR"
   local v
-  v="${UUID:-$(sec_get UUID)}";  [ -z "$v" ] && v=$(cat /proc/sys/kernel/random/uuid); UUID="$v";  sec_set UUID "$v"
-  v="${HPWD:-$(sec_get HPWD)}";  [ -z "$v" ] && v=$(openssl rand -base64 16);        HPWD="$v";  sec_set HPWD "$v"
-  v="${TPWD:-$(sec_get TPWD)}";  [ -z "$v" ] && v=$(openssl rand -base64 16);        TPWD="$v";  sec_set TPWD "$v"
-  v="${APWD:-$(sec_get APWD)}";  [ -z "$v" ] && v=$(openssl rand -base64 16);        APWD="$v";  sec_set APWD "$v"
+  v="${UUID:-$(sec_get UUID)}"; [ -z "$v" ] && v=$(cat /proc/sys/kernel/random/uuid); UUID="$v"; sec_set UUID "$v"
+  v="${HPWD:-$(sec_get HPWD)}"; [ -z "$v" ] && v=$(openssl rand -base64 16); HPWD="$v"; sec_set HPWD "$v"
+  v="${TPWD:-$(sec_get TPWD)}"; [ -z "$v" ] && v=$(openssl rand -base64 16); TPWD="$v"; sec_set TPWD "$v"
+  v="${APWD:-$(sec_get APWD)}"; [ -z "$v" ] && v=$(openssl rand -base64 16); APWD="$v"; sec_set APWD "$v"
+  v="${SOCKUSER:-$(sec_get SOCKUSER)}"; [ -z "$v" ] && v="sbuser"; SOCKUSER="$v"; sec_set SOCKUSER "$v"
+  v="${SOCKPWD:-$(sec_get SOCKPWD)}"; [ -z "$v" ] && v=$(openssl rand -base64 12); SOCKPWD="$v"; sec_set SOCKPWD "$v"
+  v="$(sec_get WSPATH)"; [ -z "$v" ] && v="/$(openssl rand -hex 3)"; WSPATH="$v"; sec_set WSPATH "$v"
+  v="$(sec_get ARGOPATH)"; [ -z "$v" ] && v="/$(openssl rand -hex 3)"; ARGOPATH="$v"; sec_set ARGOPATH "$v"
+  v="$(sec_get SUBTOKEN)"; [ -z "$v" ] && v=$(openssl rand -hex 8); SUBTOKEN="$v"; sec_set SUBTOKEN "$v"
   SNI="${SNI:-www.bing.com}"
   RSNI="${RSNI:-www.microsoft.com}"
   if [ -n "$VLRT" ]; then
-    local priv pub sid
+    local priv pub sid out
     priv=$(sec_get RPRIV); pub=$(sec_get RPUB); sid=$(sec_get SID)
     if [ -z "$priv" ]; then
-      local out
       out=$("$SB_BIN" generate reality-keypair 2>/dev/null)
       priv=$(echo "$out" | grep -i private | awk '{print $2}')
       pub=$(echo "$out" | grep -i public | awk '{print $2}')
@@ -72,11 +76,28 @@ prepare_secrets() {
     RPRIV="$priv"; RPUB="$pub"; SID="$sid"
   fi
   ADDR="${ADDR:-$(sec_get ADDR)}"
-  if [ -z "$ADDR" ]; then ADDR=$(public_ip); fi
+  [ -z "$ADDR" ] && ADDR=$(public_ip)
   [ -n "$ADDR" ] && sec_set ADDR "$ADDR"
 }
 
-# ---------- sing-box 本体 ----------
+load_saved() {
+  HYPT=$(sec_get HYPT); VLRT=$(sec_get VLRT); TUPT=$(sec_get TUPT); ANYPT=$(sec_get ANYPT)
+  WSCDN=$(sec_get WSCDN); WSDOMAIN=$(sec_get WSDOMAIN); SOCKPT=$(sec_get SOCKPT); SUBPT=$(sec_get SUBPT)
+  ARGO=$(sec_get ARGO); ARGODOMAIN=$(sec_get ARGODOM)
+  SNI=$(sec_get SNI); RSNI=$(sec_get RSNI); ADDR=$(sec_get ADDR)
+  UUID=$(sec_get UUID); HPWD=$(sec_get HPWD); TPWD=$(sec_get TPWD); APWD=$(sec_get APWD)
+  SOCKUSER=$(sec_get SOCKUSER); SOCKPWD=$(sec_get SOCKPWD)
+  WSPATH=$(sec_get WSPATH); ARGOPATH=$(sec_get ARGOPATH); SUBTOKEN=$(sec_get SUBTOKEN)
+  RPUB=$(sec_get RPUB); SID=$(sec_get SID)
+}
+
+save_form() {
+  sec_set HYPT "$HYPT"; sec_set VLRT "$VLRT"; sec_set TUPT "$TUPT"; sec_set ANYPT "$ANYPT"
+  sec_set WSCDN "$WSCDN"; sec_set WSDOMAIN "$WSDOMAIN"; sec_set SOCKPT "$SOCKPT"; sec_set SUBPT "$SUBPT"
+  sec_set ARGO "$ARGO"; sec_set SNI "$SNI"; sec_set RSNI "$RSNI"
+}
+
+# ---------- 本体下载 ----------
 install_binary() {
   if [ -x "$SB_BIN" ]; then return 0; fi
   local arch ver url tmp
@@ -94,6 +115,18 @@ install_binary() {
   ok "sing-box 已就绪：$("$SB_BIN" version | head -1)"
 }
 
+install_cloudflared() {
+  if [ -x "$CF_BIN" ]; then return 0; fi
+  local arch
+  case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac
+  info "下载 cloudflared (linux-${arch}) ..."
+  curl -sL --max-time 300 -o "$CF_BIN" \
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}" \
+    || { err "cloudflared 下载失败"; return 1; }
+  chmod +x "$CF_BIN"
+  ok "cloudflared 已就绪"
+}
+
 gen_cert() {
   if [ -f "$SB_DIR/cert.pem" ] && [ -f "$SB_DIR/key.pem" ]; then return 0; fi
   if openssl ecparam -genkey -name prime256v1 -out "$SB_DIR/key.pem" 2>/dev/null; then
@@ -108,28 +141,21 @@ gen_cert() {
 # ---------- 配置组装 ----------
 build_config() {
   local inbounds="" sep=""
-  if [ -n "$HYPT" ]; then
-    inbounds+=$(cat <<EOF
-$sep{
-      "type": "hysteria2",
-      "tag": "hy2-in",
-      "listen": "::",
-      "listen_port": $HYPT,
+  add_in() { inbounds+="$sep$1"; sep=","; }
+  if [ -n "$HYPT" ]; then add_in "$(cat <<EOF
+{
+      "type": "hysteria2", "tag": "hy2-in",
+      "listen": "::", "listen_port": $HYPT,
       "users": [ { "password": "$HPWD" } ],
       "tls": { "enabled": true, "server_name": "$SNI",
                "certificate_path": "$SB_DIR/cert.pem", "key_path": "$SB_DIR/key.pem" }
     }
 EOF
-)
-    sep=","
-  fi
-  if [ -n "$VLRT" ]; then
-    inbounds+=$(cat <<EOF
-$sep{
-      "type": "vless",
-      "tag": "reality-in",
-      "listen": "::",
-      "listen_port": $VLRT,
+)"; fi
+  if [ -n "$VLRT" ]; then add_in "$(cat <<EOF
+{
+      "type": "vless", "tag": "reality-in",
+      "listen": "::", "listen_port": $VLRT,
       "users": [ { "uuid": "$UUID", "flow": "xtls-rprx-vision" } ],
       "tls": { "enabled": true, "server_name": "$RSNI",
                "reality": { "enabled": true,
@@ -137,42 +163,58 @@ $sep{
                             "private_key": "$RPRIV", "short_id": [ "$SID" ] } }
     }
 EOF
-)
-    sep=","
-  fi
-  if [ -n "$TUPT" ]; then
-    inbounds+=$(cat <<EOF
-$sep{
-      "type": "tuic",
-      "tag": "tuic-in",
-      "listen": "::",
-      "listen_port": $TUPT,
+)"; fi
+  if [ -n "$TUPT" ]; then add_in "$(cat <<EOF
+{
+      "type": "tuic", "tag": "tuic-in",
+      "listen": "::", "listen_port": $TUPT,
       "users": [ { "uuid": "$UUID", "password": "$TPWD" } ],
       "congestion_control": "bbr",
       "tls": { "enabled": true, "server_name": "$SNI", "alpn": [ "h3" ],
                "certificate_path": "$SB_DIR/cert.pem", "key_path": "$SB_DIR/key.pem" }
     }
 EOF
-)
-    sep=","
-  fi
-  if [ -n "$ANYPT" ]; then
-    inbounds+=$(cat <<EOF
-$sep{
-      "type": "anytls",
-      "tag": "anytls-in",
-      "listen": "::",
-      "listen_port": $ANYPT,
+)"; fi
+  if [ -n "$ANYPT" ]; then add_in "$(cat <<EOF
+{
+      "type": "anytls", "tag": "anytls-in",
+      "listen": "::", "listen_port": $ANYPT,
       "users": [ { "password": "$APWD" } ],
       "tls": { "enabled": true, "server_name": "$SNI",
                "certificate_path": "$SB_DIR/cert.pem", "key_path": "$SB_DIR/key.pem" }
     }
 EOF
-)
-    sep=","
-  fi
+)"; fi
+  if [ -n "$WSCDN" ]; then add_in "$(cat <<EOF
+{
+      "type": "vless", "tag": "ws-in",
+      "listen": "::", "listen_port": $WSCDN,
+      "users": [ { "uuid": "$UUID" } ],
+      "transport": { "type": "ws", "path": "$WSPATH" },
+      "tls": { "enabled": true, "server_name": "${WSDOMAIN:-$SNI}",
+               "certificate_path": "$SB_DIR/cert.pem", "key_path": "$SB_DIR/key.pem" }
+    }
+EOF
+)"; fi
+  if [ -n "$ARGO" ]; then add_in "$(cat <<EOF
+{
+      "type": "vless", "tag": "argo-in",
+      "listen": "127.0.0.1", "listen_port": $ARGO_LOCAL_PORT,
+      "users": [ { "uuid": "$UUID" } ],
+      "transport": { "type": "ws", "path": "$ARGOPATH" }
+    }
+EOF
+)"; fi
+  if [ -n "$SOCKPT" ]; then add_in "$(cat <<EOF
+{
+      "type": "socks", "tag": "socks-in",
+      "listen": "::", "listen_port": $SOCKPT,
+      "users": [ { "username": "$SOCKUSER", "password": "$SOCKPWD" } ]
+    }
+EOF
+)"; fi
   if [ -z "$inbounds" ]; then
-    err "一个协议都没启用：至少给 HYPT / VLRT / TUPT / ANYPT 中的一个填端口"
+    err "一个协议都没启用：至少填 HYPT / VLRT / TUPT / ANYPT / WSCDN / SOCKPT 中的一个，或 ARGO=1"
     return 1
   fi
   cat > "$SB_DIR/config.json" <<EOF
@@ -193,72 +235,202 @@ build_links() {
   [ -n "$VLRT" ] && out+="vless://${UUID}@${ADDR}:${VLRT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${RSNI}&fp=chrome&pbk=${RPUB}&sid=${SID}&type=tcp#reality-${ADDR}"$'\n'
   [ -n "$TUPT" ] && out+="tuic://${UUID}:$(urlencode "$TPWD")@${ADDR}:${TUPT}?sni=${SNI}&insecure=1&alpn=h3#tuic-${ADDR}"$'\n'
   [ -n "$ANYPT" ] && out+="anytls://$(urlencode "$APWD")@${ADDR}:${ANYPT}?sni=${SNI}&insecure=1#anytls-${ADDR}"$'\n'
+  if [ -n "$WSCDN" ]; then
+    local wa="${WSDOMAIN:-$ADDR}"
+    out+="vless://${UUID}@${wa}:${WSCDN}?encryption=none&security=tls&sni=${wa}&type=ws&path=$(urlencode "$WSPATH")&allowInsecure=1#ws-${wa}"$'\n'
+  fi
+  if [ -n "$ARGO" ] && [ -n "$ARGODOMAIN" ]; then
+    out+="vless://${UUID}@${ARGODOMAIN}:443?encryption=none&security=tls&sni=${ARGODOMAIN}&type=ws&host=${ARGODOMAIN}&path=$(urlencode "$ARGOPATH")#argo-${ARGODOMAIN}"$'\n'
+  fi
+  [ -n "$SOCKPT" ] && out+="socks5://${SOCKUSER}:$(urlencode "$SOCKPWD")@${ADDR}:${SOCKPT}#socks-${ADDR}"$'\n'
   echo -n "$out" > "$SB_DIR/links.txt"
   echo "$out"
 }
 
-# ---------- 服务托管 ----------
-svc_start() {
-  if has_systemd; then
-    cat > /etc/systemd/system/sb-panel.service <<EOF
+sub_url() { [ -n "$SUBPT" ] && echo "http://${ADDR}:${SUBPT}/sub/${SUBTOKEN}"; }
+
+make_sub() {
+  base64 -w 0 "$SB_DIR/links.txt" > "$SB_DIR/sub.txt" 2>/dev/null || base64 "$SB_DIR/links.txt" | tr -d '\n' > "$SB_DIR/sub.txt"
+}
+
+# ---------- 订阅小服务器（只认 /sub/<令牌> 一个路径） ----------
+write_sub_server() {
+  cat > "$SB_DIR/sub_server.py" <<'PYEOF'
+import http.server, os, sys
+BASE = os.path.dirname(os.path.abspath(__file__))
+PORT = int(sys.argv[1]); TOKEN = sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/sub/" + TOKEN:
+            try:
+                data = open(os.path.join(BASE, "sub.txt"), "rb").read()
+            except OSError:
+                data = b""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_response(404); self.end_headers()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("0.0.0.0", PORT), H).serve_forever()
+PYEOF
+}
+
+# ---------- 进程托管（sing-box / cloudflared / 订阅，三件套） ----------
+_unit() { # _unit 单元名 描述 命令...
+  local name="$1" desc="$2"; shift 2
+  cat > "/etc/systemd/system/$name.service" <<EOF
 [Unit]
-Description=sing-box multi-protocol node (sb.sh)
+Description=$desc
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=$SB_BIN run -c $SB_DIR/config.json
+ExecStart=$*
 Restart=on-failure
-StandardOutput=append:$SB_DIR/sing-box.log
-StandardError=append:$SB_DIR/sing-box.log
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable sb-panel >/dev/null 2>&1
-    systemctl restart sb-panel
-    sleep 1
-    systemctl is-active --quiet sb-panel && ok "服务已启动（systemd）" || { err "服务启动失败，看 $SB_DIR/sing-box.log"; return 1; }
-  else
-    if [ -f "$SB_DIR/pid" ] && kill -0 "$(cat "$SB_DIR/pid")" 2>/dev/null; then
-      warn "服务已在运行（PID $(cat "$SB_DIR/pid")）"; return 0
-    fi
-    cat > "$SB_DIR/start.sh" <<EOF
+  systemctl daemon-reload
+  systemctl enable "$name" >/dev/null 2>&1
+  systemctl restart "$name"
+}
+
+_run_bg() { # _run_bg 名字 命令行（nohup 模式，写 pid 与 log）
+  local name="$1" cmd="$2"
+  cat > "$SB_DIR/run-$name.sh" <<EOF
 #!/bin/sh
 cd $SB_DIR || exit 1
-nohup $SB_BIN run -c config.json >> sing-box.log 2>&1 &
-echo \$! > $SB_DIR/pid
+nohup $cmd >> $name.log 2>&1 &
+echo \$! > $SB_DIR/$name.pid
 EOF
-    chmod +x "$SB_DIR/start.sh"
-    sh "$SB_DIR/start.sh"
-    sleep 1
-    if [ -f "$SB_DIR/pid" ] && kill -0 "$(cat "$SB_DIR/pid")" 2>/dev/null; then
-      ok "服务已启动（nohup，PID $(cat "$SB_DIR/pid")）"
-    else
-      err "服务启动失败，看 $SB_DIR/sing-box.log"; return 1
-    fi
+  chmod +x "$SB_DIR/run-$name.sh"
+  sh "$SB_DIR/run-$name.sh"
+}
+
+_kill_pid() { # _kill_pid 名字
+  local name="$1"
+  if [ -f "$SB_DIR/$name.pid" ]; then
+    kill "$(cat "$SB_DIR/$name.pid")" 2>/dev/null
+    rm -f "$SB_DIR/$name.pid"
   fi
 }
 
-svc_stop() {
+_pid_alive() { [ -f "$SB_DIR/$1.pid" ] && kill -0 "$(cat "$SB_DIR/$1.pid")" 2>/dev/null; }
+
+start_singbox() {
   if has_systemd; then
-    systemctl stop sb-panel 2>/dev/null
-    systemctl disable sb-panel >/dev/null 2>&1
+    _unit sb-panel "sing-box multi-protocol node (sb.sh)" "$SB_BIN run -c $SB_DIR/config.json"
+    sleep 1
+    systemctl is-active --quiet sb-panel && ok "sing-box 已启动（systemd）" || { err "sing-box 启动失败，看 $SB_DIR/sing-box.log 或 journalctl -u sb-panel"; return 1; }
+  else
+    if _pid_alive main; then warn "sing-box 已在运行"; return 0; fi
+    _run_bg main "$SB_BIN run -c config.json"
+    sleep 1
+    _pid_alive main && ok "sing-box 已启动（nohup，PID $(cat "$SB_DIR/main.pid")）" || { err "sing-box 启动失败，看 $SB_DIR/main.log"; return 1; }
   fi
-  if [ -f "$SB_DIR/pid" ]; then
-    kill "$(cat "$SB_DIR/pid")" 2>/dev/null; rm -f "$SB_DIR/pid"
-  fi
-  local p
-  p=$(pgrep -f "sing-box run -c $SB_DIR/config.json" 2>/dev/null)
-  [ -n "$p" ] && kill $p 2>/dev/null
-  ok "服务已停止"
 }
 
-svc_running() {
+start_argo() {
+  [ -n "$ARGO" ] || return 0
+  install_cloudflared || return 1
+  local cmd
+  if [ -n "$ARGOTOKEN" ]; then
+    cmd="$CF_BIN tunnel run --token $ARGOTOKEN"
+    [ -n "$ARGODOMAIN" ] && sec_set ARGODOM "$ARGODOMAIN"
+  else
+    cmd="$CF_BIN tunnel --url http://127.0.0.1:$ARGO_LOCAL_PORT --no-autoupdate"
+  fi
+  if has_systemd; then
+    _unit sb-argo "cloudflared argo tunnel (sb.sh)" "$cmd"
+  else
+    _kill_pid argo
+    _run_bg argo "$cmd"
+  fi
+  if [ -z "$ARGOTOKEN" ]; then
+    # 临时隧道：等日志里出现 trycloudflare 域名
+    local i dom=""
+    for i in $(seq 1 20); do
+      sleep 1
+      if has_systemd; then
+        dom=$(journalctl -u sb-argo --no-pager -n 80 2>/dev/null | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | grep -v 'api\.trycloudflare' | head -1)
+      else
+        dom=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$SB_DIR/argo.log" 2>/dev/null | grep -v 'api\.trycloudflare' | head -1)
+      fi
+      [ -n "$dom" ] && break
+    done
+    if [ -n "$dom" ]; then
+      ARGODOMAIN="${dom#https://}"
+      sec_set ARGODOM "$ARGODOMAIN"
+      ok "Argo 临时隧道已通：$dom"
+    else
+      warn "Argo 隧道域名暂未拿到（cloudflared 可能还在连），稍后跑 list 再看，或查 argo 日志"
+    fi
+  else
+    ok "Argo 固定隧道已启动（令牌模式）"
+  fi
+}
+
+start_sub() {
+  [ -n "$SUBPT" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "没有 python3，订阅服务没法起；订阅内容已生成在 $SB_DIR/sub.txt，可手动取用"
+    return 0
+  fi
+  write_sub_server
+  if has_systemd; then
+    _unit sb-sub "subscription server (sb.sh)" "/usr/bin/env python3 $SB_DIR/sub_server.py $SUBPT $SUBTOKEN"
+  else
+    _kill_pid sub
+    _run_bg sub "python3 sub_server.py $SUBPT $SUBTOKEN"
+  fi
+  sleep 1
+  ok "订阅服务已启动：$(sub_url)"
+}
+
+stop_all() {
+  if has_systemd; then
+    systemctl stop sb-panel sb-argo sb-sub 2>/dev/null
+    systemctl disable sb-panel sb-argo sb-sub >/dev/null 2>&1
+  fi
+  _kill_pid main; _kill_pid argo; _kill_pid sub
+  local p
+  p=$(pgrep -f "sing-box run -c $SB_DIR/config.json" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
+  p=$(pgrep -f "$SB_DIR/cloudflared tunnel" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
+  p=$(pgrep -f "sub_server.py $SUBPT" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
+  ok "全部服务已停止"
+}
+
+main_running() {
   if has_systemd && systemctl is-active --quiet sb-panel 2>/dev/null; then return 0; fi
-  if [ -f "$SB_DIR/pid" ] && kill -0 "$(cat "$SB_DIR/pid")" 2>/dev/null; then return 0; fi
+  if _pid_alive main; then return 0; fi
   pgrep -f "sing-box run -c $SB_DIR/config.json" >/dev/null 2>&1
+}
+
+# ---------- 上报 ----------
+do_report() {
+  [ -n "$REPORT" ] || return 0
+  sec_set REPORT "$REPORT"
+  if command -v python3 >/dev/null 2>&1; then
+    REPORT="$REPORT" SB_DIR="$SB_DIR" ADDR="$ADDR" python3 - <<'PYEOF' >/dev/null 2>&1
+import json, os, urllib.request
+links = open(os.path.join(os.environ["SB_DIR"], "links.txt")).read().strip().splitlines()
+body = json.dumps({"server": os.environ.get("ADDR", ""), "action": "install",
+                   "links": links,
+                   "text": "节点已安装\n" + "\n".join(links)}).encode()
+req = urllib.request.Request(os.environ["REPORT"], data=body,
+                             headers={"Content-Type": "application/json"})
+urllib.request.urlopen(req, timeout=10)
+PYEOF
+    ok "已上报到 $REPORT"
+  else
+    warn "没有 python3，跳过上报"
+  fi
 }
 
 # ---------- 动作 ----------
@@ -268,43 +440,59 @@ do_install() {
   prepare_secrets
   [ -z "$ADDR" ] && { err "拿不到服务器地址，请用 ADDR=地址 指定"; exit 1; }
   gen_cert || { err "证书生成失败"; exit 1; }
-  # 记住本次端口组合，list 时复用
-  sec_set HYPT "$HYPT"; sec_set VLRT "$VLRT"; sec_set TUPT "$TUPT"; sec_set ANYPT "$ANYPT"
-  sec_set SNI "$SNI"; sec_set RSNI "$RSNI"
+  save_form
+  [ -n "$REPORT" ] && sec_set REPORT "$REPORT"
   if ! build_config; then err "配置校验未通过"; exit 1; fi
-  svc_stop >/dev/null 2>&1
-  svc_start || exit 1
+  stop_all >/dev/null 2>&1
+  start_singbox || exit 1
+  start_argo
   echo
-  ok "安装完成，分享链接（已存 $SB_DIR/links.txt）："
+  ok "分享链接（已存 $SB_DIR/links.txt）："
   build_links
+  if [ -n "$SUBPT" ]; then
+    make_sub
+    start_sub
+    echo "订阅链接：$(sub_url)"
+  fi
   if command -v qrencode >/dev/null 2>&1; then
     while IFS= read -r line; do
       [ -n "$line" ] && { echo; qrencode -t ANSIUTF8 "$line"; }
     done < "$SB_DIR/links.txt"
   fi
+  do_report
 }
 
 do_list() {
-  [ -f "$SB_DIR/secrets" ] || { err "还没安装过，先跑 install"; exit 1; }
-  HYPT=$(sec_get HYPT); VLRT=$(sec_get VLRT); TUPT=$(sec_get TUPT); ANYPT=$(sec_get ANYPT)
-  SNI=$(sec_get SNI); RSNI=$(sec_get RSNI); ADDR=$(sec_get ADDR)
-  UUID=$(sec_get UUID); HPWD=$(sec_get HPWD); TPWD=$(sec_get TPWD); APWD=$(sec_get APWD)
-  RPUB=$(sec_get RPUB); SID=$(sec_get SID)
-  echo "服务状态：$(svc_running && echo 运行中 || echo 已停止)"
+  [ -f "$SECRETS" ] || { err "还没安装过，先跑 install"; exit 1; }
+  load_saved
+  REPORT=$(sec_get REPORT)
+  echo "sing-box：$(main_running && echo 运行中 || echo 已停止)"
+  [ -n "$ARGO" ] && echo "Argo 隧道域名：${ARGODOMAIN:-未获取}"
   echo "分享链接："
   build_links
+  [ -n "$SUBPT" ] && echo "订阅链接：$(sub_url)"
 }
 
 case "$ACTION" in
   install|rep) do_install ;;
   list) do_list ;;
-  start) svc_start ;;
-  stop) svc_stop ;;
-  restart) svc_stop; svc_start ;;
-  status) echo "服务状态：$(svc_running && echo 运行中 || echo 已停止)"; tail -5 "$SB_DIR/sing-box.log" 2>/dev/null ;;
+  start)
+    load_saved
+    start_singbox; start_argo
+    [ -n "$SUBPT" ] && { make_sub; start_sub; }
+    ;;
+  stop) stop_all ;;
+  restart) load_saved; stop_all; start_singbox; start_argo; [ -n "$SUBPT" ] && start_sub ;;
+  status)
+    echo "sing-box：$(main_running && echo 运行中 || echo 已停止)"
+    tail -5 "$SB_DIR/main.log" 2>/dev/null || journalctl -u sb-panel --no-pager -n 5 2>/dev/null
+    ;;
   del)
-    svc_stop
-    if has_systemd; then rm -f /etc/systemd/system/sb-panel.service; systemctl daemon-reload 2>/dev/null; fi
+    stop_all
+    if has_systemd; then
+      rm -f /etc/systemd/system/sb-panel.service /etc/systemd/system/sb-argo.service /etc/systemd/system/sb-sub.service
+      systemctl daemon-reload 2>/dev/null
+    fi
     rm -rf "$SB_DIR"
     ok "已卸载并删除 $SB_DIR"
     ;;

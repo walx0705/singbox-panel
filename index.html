@@ -79,7 +79,7 @@
 <body>
 <header>
   <h1>singbox--节点命令面板</h1>
-  <span class="ver">v1.1.0</span>
+  <span class="ver">v1.2.0</span>
   <div class="spacer"></div>
   <a class="hbtn green" href="https://github.com/walx0705/singbox-panel" target="_blank" rel="noopener">📦 Singbox 一键脚本</a>
   <button class="hbtn" id="themeBtn">☀️ 浅色</button>
@@ -96,7 +96,8 @@
     <a href="#action"><span class="n">7</span>安装动作</a>
     <a href="#sub"><span class="n">8</span>订阅</a>
     <a href="#report"><span class="n">9</span>上报</a>
-    <a href="#quick"><span class="n">10</span>快捷指令</a>
+    <a href="#nezha"><span class="n">10</span>哪吒监控</a>
+    <a href="#quick"><span class="n">11</span>快捷指令</a>
   </nav>
 
   <main>
@@ -246,9 +247,25 @@
       </div>
     </section>
 
-    <!-- 10 快捷指令 -->
+    <!-- 10 哪吒监控 -->
+    <section class="card" id="nezha">
+      <h2>⑩ 哪吒监控</h2>
+      <p class="hint" style="margin:0 0 14px;">在节点机器上装哪吒探针（nezha-agent），自动上报到你的哪吒面板。面板地址与探针密钥都填了才装；探针跟节点一起启停、一起卸载。</p>
+      <div class="grid" style="margin-top:0;">
+        <div class="field"><label>哪吒面板地址 NZ_SERVER（探针连接的地址:端口）</label><input type="text" id="NZ_SERVER" placeholder="如 nezha.example.com:8008"></div>
+        <div class="field"><label>探针密钥 NZ_KEY（面板里给这台服务器生成的密钥）</label><input type="text" id="NZ_KEY" placeholder="在面板的服务器列表里获取"></div>
+        <div class="field"><label>连接走 TLS（面板开了 HTTPS/gRPC TLS 时选开）</label>
+          <select id="NZ_TLS">
+            <option value="">关（明文连接）</option>
+            <option value="1">开（TLS）</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 快捷指令 -->
     <section class="card" id="quick">
-      <h2>⑩ 快捷指令</h2>
+      <h2>⑪ 快捷指令</h2>
       <div class="quick" id="quickList"></div>
       <p class="hint">这些命令不需要任何变量，在目标机器上直接粘贴执行，操作的是那台机器上已装的节点。</p>
     </section>
@@ -263,10 +280,12 @@
 <script>
   var RAW = "https://raw.githubusercontent.com/walx0705/singbox-panel/main/sb.sh";
   var VAR_ORDER = ["HYPT","VLRT","TUPT","ANYPT","WSCDN","WSDOMAIN","SOCKPT","SOCKUSER","SOCKPWD",
-                   "ARGO","ARGOTOKEN","ARGODOMAIN","SUBPT","REPORT","ADDR","SNI","RSNI","UUID","HPWD"];
+                   "ARGO","ARGOTOKEN","ARGODOMAIN","SUBPT","REPORT","NZ_SERVER","NZ_KEY","NZ_TLS",
+                   "ADDR","SNI","RSNI","UUID","HPWD"];
   var CHIP_DEFS = [
     ["HYPT","Hysteria2"],["VLRT","VLESS-Reality"],["TUPT","TUIC"],["ANYPT","AnyTLS"],
-    ["WSCDN","WS-CDN"],["SOCKPT","Socks5"],["ARGO","Argo 隧道"],["SUBPT","订阅"],["REPORT","上报"]
+    ["WSCDN","WS-CDN"],["SOCKPT","Socks5"],["ARGO","Argo 隧道"],["SUBPT","订阅"],["REPORT","上报"],
+    ["NZ_SERVER","哪吒"]
   ];
   var action = "install";
 

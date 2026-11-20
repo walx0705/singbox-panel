@@ -79,7 +79,7 @@
 <body>
 <header>
   <h1>singbox--节点命令面板</h1>
-  <span class="ver">v1.2.0</span>
+  <span class="ver">v1.3.0</span>
   <div class="spacer"></div>
   <a class="hbtn green" href="https://github.com/walx0705/singbox-panel" target="_blank" rel="noopener">📦 Singbox 一键脚本</a>
   <button class="hbtn" id="themeBtn">☀️ 浅色</button>
@@ -250,11 +250,17 @@
     <!-- 10 哪吒监控 -->
     <section class="card" id="nezha">
       <h2>⑩ 哪吒监控</h2>
-      <p class="hint" style="margin:0 0 14px;">在节点机器上装哪吒探针（nezha-agent），自动上报到你的哪吒面板。面板地址与探针密钥都填了才装；探针跟节点一起启停、一起卸载。</p>
+      <p class="hint" style="margin:0 0 14px;">在节点机器上装哪吒探针（nezha-agent），自动上报到你的哪吒面板。面板地址与探针密钥都填了才装；探针跟节点一起启停、一起卸载。<b>版本要跟你的面板对上</b>：新版面板选 v1，旧版面板选 v0，两代协议不互通，选错连不上。</p>
       <div class="grid" style="margin-top:0;">
+        <div class="field"><label>哪吒版本 NZ_VER（按你的面板版本选）</label>
+          <select id="NZ_VER">
+            <option value="v1">v1（新版面板）</option>
+            <option value="v0">v0（旧版面板）</option>
+          </select>
+        </div>
         <div class="field"><label>哪吒面板地址 NZ_SERVER（探针连接的地址:端口）</label><input type="text" id="NZ_SERVER" placeholder="如 nezha.example.com:8008"></div>
         <div class="field"><label>探针密钥 NZ_KEY（面板里给这台服务器生成的密钥）</label><input type="text" id="NZ_KEY" placeholder="在面板的服务器列表里获取"></div>
-        <div class="field"><label>连接走 TLS（面板开了 HTTPS/gRPC TLS 时选开）</label>
+        <div class="field"><label>连接走 TLS（仅 v1；面板开了 TLS 时选开）</label>
           <select id="NZ_TLS">
             <option value="">关（明文连接）</option>
             <option value="1">开（TLS）</option>
@@ -280,7 +286,7 @@
 <script>
   var RAW = "https://raw.githubusercontent.com/walx0705/singbox-panel/main/sb.sh";
   var VAR_ORDER = ["HYPT","VLRT","TUPT","ANYPT","WSCDN","WSDOMAIN","SOCKPT","SOCKUSER","SOCKPWD",
-                   "ARGO","ARGOTOKEN","ARGODOMAIN","SUBPT","REPORT","NZ_SERVER","NZ_KEY","NZ_TLS",
+                   "ARGO","ARGOTOKEN","ARGODOMAIN","SUBPT","REPORT","NZ_VER","NZ_SERVER","NZ_KEY","NZ_TLS",
                    "ADDR","SNI","RSNI","UUID","HPWD"];
   var CHIP_DEFS = [
     ["HYPT","Hysteria2"],["VLRT","VLESS-Reality"],["TUPT","TUIC"],["ANYPT","AnyTLS"],
@@ -300,7 +306,10 @@
 
   function build(){
     var vars = [];
-    VAR_ORDER.forEach(function(k){ var v = val(k); if(v) vars.push(k + "=" + v); });
+    VAR_ORDER.forEach(function(k){
+      if(k === "NZ_VER" && !val("NZ_SERVER")) return; // 没填哪吒就不带版本变量
+      var v = val(k); if(v) vars.push(k + "=" + v);
+    });
     var cmd = baseCmd(action), out;
     if(el("mode").value === "multi" && vars.length){
       out = vars.join(" \\\n") + " \\\n" + cmd;

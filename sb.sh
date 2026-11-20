@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# sb.sh v1.2 —— sing-box 多协议一键脚本（配合图形面板拼命令使用）
+# sb.sh v1.3 —— sing-box 多协议一键脚本（配合图形面板拼命令使用）
 # 用法：HYPT=2082 VLRT=2083 bash <(curl -sL <地址>/sb.sh) install
 #
 # 协议开关（留空=不启用）：
@@ -11,6 +11,7 @@
 #   SUBPT  订阅服务端口（生成 http://地址:端口/sub/令牌 的订阅链接）
 #   REPORT 上报地址（安装完成后把节点链接 POST 到这个 webhook）
 #   NZ_SERVER / NZ_KEY 哪吒面板地址与探针密钥（都填才装探针；NZ_TLS=1 走 TLS）
+#   NZ_VER   哪吒版本：v1 新版面板（默认，配置文件模式）| v0 旧版面板（参数模式）
 # 通用：ADDR 服务器地址 | SNI 自签证书名 | RSNI Reality 目标站
 #       UUID / HPWD / TPWD / APWD 指定凭据（默认生成并保存）
 # 动作：install（默认） rep list start stop restart status del
@@ -92,13 +93,14 @@ load_saved() {
   WSPATH=$(sec_get WSPATH); ARGOPATH=$(sec_get ARGOPATH); SUBTOKEN=$(sec_get SUBTOKEN)
   RPUB=$(sec_get RPUB); SID=$(sec_get SID)
   NZ_SERVER=$(sec_get NZ_SERVER); NZ_KEY=$(sec_get NZ_KEY); NZ_TLS=$(sec_get NZ_TLS); NZUUID=$(sec_get NZUUID)
+  NZ_VER=$(sec_get NZ_VER)
 }
 
 save_form() {
   sec_set HYPT "$HYPT"; sec_set VLRT "$VLRT"; sec_set TUPT "$TUPT"; sec_set ANYPT "$ANYPT"
   sec_set WSCDN "$WSCDN"; sec_set WSDOMAIN "$WSDOMAIN"; sec_set SOCKPT "$SOCKPT"; sec_set SUBPT "$SUBPT"
   sec_set ARGO "$ARGO"; sec_set SNI "$SNI"; sec_set RSNI "$RSNI"
-  sec_set NZ_SERVER "$NZ_SERVER"; sec_set NZ_TLS "$NZ_TLS"
+  sec_set NZ_SERVER "$NZ_SERVER"; sec_set NZ_TLS "$NZ_TLS"; sec_set NZ_VER "${NZ_VER:-v1}"
 }
 
 # ---------- 本体下载 ----------
@@ -131,15 +133,26 @@ install_cloudflared() {
   ok "cloudflared 已就绪"
 }
 
-# ---------- 哪吒探针 ----------
+# ---------- 哪吒探针（v1 新版面板 / v0 旧版面板 双支持） ----------
+NZ_V0_PIN="v0.20.5"
 install_nezha() {
-  if [ -x "$SB_DIR/nezha-agent" ]; then return 0; fi
-  local arch tmp
+  NZ_VER="${NZ_VER:-v1}"
+  local genfile="$SB_DIR/nezha.gen"
+  if [ -x "$SB_DIR/nezha-agent" ] && [ -f "$genfile" ] && [ "$(cat "$genfile")" = "$NZ_VER" ]; then return 0; fi
+  local arch tmp url tag
   case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac
-  info "下载哪吒探针 nezha-agent (linux-${arch}) ..."
+  if [ "$NZ_VER" = "v0" ]; then
+    tag=$(curl -s --max-time 10 "https://api.github.com/repos/nezhahq/agent/releases?per_page=100" \
+      | grep -o '"tag_name": *"v0\.[^"]*"' | head -1 | sed 's/.*"//;s/"//')
+    [ -z "$tag" ] && tag="$NZ_V0_PIN"
+    url="https://github.com/nezhahq/agent/releases/download/${tag}/nezha-agent_linux_${arch}.zip"
+    info "下载哪吒探针 v0 版 $tag (linux-${arch}) ..."
+  else
+    url="https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${arch}.zip"
+    info "下载哪吒探针 v1 版（官方最新，linux-${arch}）..."
+  fi
   tmp=$(mktemp -d)
-  curl -sL --max-time 300 -o "$tmp/nz.zip" \
-    "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${arch}.zip" \
+  curl -sL --max-time 300 -o "$tmp/nz.zip" "$url" \
     || { err "哪吒探针下载失败"; rm -rf "$tmp"; return 1; }
   if command -v unzip >/dev/null 2>&1; then
     unzip -o -q "$tmp/nz.zip" -d "$tmp" || { err "哪吒探针解压失败"; rm -rf "$tmp"; return 1; }
@@ -151,15 +164,23 @@ install_nezha() {
   fi
   cp "$tmp/nezha-agent" "$SB_DIR/nezha-agent"
   chmod +x "$SB_DIR/nezha-agent"; rm -rf "$tmp"
-  ok "哪吒探针已就绪"
+  echo "$NZ_VER" > "$genfile"
+  ok "哪吒探针已就绪（$NZ_VER 版）"
 }
 
 start_nezha() {
   [ -n "$NZ_SERVER" ] && [ -n "$NZ_KEY" ] || return 0
+  NZ_VER="${NZ_VER:-v1}"
   install_nezha || return 1
-  local tls="false"
-  [ "$NZ_TLS" = "1" ] && tls="true"
-  cat > "$SB_DIR/nezha.yml" <<EOF
+  local cmd
+  if [ "$NZ_VER" = "v0" ]; then
+    # v0 旧版：参数模式，没有配置文件；v0 探针不支持 TLS 开关
+    [ "$NZ_TLS" = "1" ] && warn "v0 探针不支持 TLS 参数，已忽略 NZ_TLS"
+    cmd="$SB_DIR/nezha-agent -s $NZ_SERVER -p $NZ_KEY"
+  else
+    local tls="false"
+    [ "$NZ_TLS" = "1" ] && tls="true"
+    cat > "$SB_DIR/nezha.yml" <<EOF
 debug: false
 server: $NZ_SERVER
 client_secret: $NZ_KEY
@@ -167,16 +188,18 @@ tls: $tls
 uuid: $NZUUID
 report_delay: 3
 EOF
-  chmod 600 "$SB_DIR/nezha.yml" 2>/dev/null
+    chmod 600 "$SB_DIR/nezha.yml" 2>/dev/null
+    cmd="$SB_DIR/nezha-agent -c $SB_DIR/nezha.yml"
+  fi
   if has_systemd; then
-    _unit sb-nezha "nezha agent (sb.sh)" "$SB_DIR/nezha-agent -c $SB_DIR/nezha.yml"
+    _unit sb-nezha "nezha agent (sb.sh)" "$cmd"
     sleep 1
-    systemctl is-active --quiet sb-nezha && ok "哪吒探针已启动（面板 $NZ_SERVER）" || warn "哪吒探针启动异常，查 journalctl -u sb-nezha"
+    systemctl is-active --quiet sb-nezha && ok "哪吒探针已启动（$NZ_VER 版，面板 $NZ_SERVER）" || warn "哪吒探针启动异常，查 journalctl -u sb-nezha"
   else
     _kill_pid nezha
-    _run_bg nezha "$SB_DIR/nezha-agent -c $SB_DIR/nezha.yml"
+    _run_bg nezha "$cmd"
     sleep 1
-    _pid_alive nezha && ok "哪吒探针已启动（面板 $NZ_SERVER）" || warn "哪吒探针启动异常，看 $SB_DIR/nezha.log"
+    _pid_alive nezha && ok "哪吒探针已启动（$NZ_VER 版，面板 $NZ_SERVER）" || warn "哪吒探针启动异常，看 $SB_DIR/nezha.log"
   fi
 }
 

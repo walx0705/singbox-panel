@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# sb.sh v1.1 —— sing-box 多协议一键脚本（配合图形面板拼命令使用）
+# sb.sh v1.2 —— sing-box 多协议一键脚本（配合图形面板拼命令使用）
 # 用法：HYPT=2082 VLRT=2083 bash <(curl -sL <地址>/sb.sh) install
 #
 # 协议开关（留空=不启用）：
@@ -10,6 +10,7 @@
 #   ARGO   填 1 启用 Argo 隧道（ARGOTOKEN 固定隧道令牌，留空=临时隧道）
 #   SUBPT  订阅服务端口（生成 http://地址:端口/sub/令牌 的订阅链接）
 #   REPORT 上报地址（安装完成后把节点链接 POST 到这个 webhook）
+#   NZ_SERVER / NZ_KEY 哪吒面板地址与探针密钥（都填才装探针；NZ_TLS=1 走 TLS）
 # 通用：ADDR 服务器地址 | SNI 自签证书名 | RSNI Reality 目标站
 #       UUID / HPWD / TPWD / APWD 指定凭据（默认生成并保存）
 # 动作：install（默认） rep list start stop restart status del
@@ -61,6 +62,7 @@ prepare_secrets() {
   v="$(sec_get WSPATH)"; [ -z "$v" ] && v="/$(openssl rand -hex 3)"; WSPATH="$v"; sec_set WSPATH "$v"
   v="$(sec_get ARGOPATH)"; [ -z "$v" ] && v="/$(openssl rand -hex 3)"; ARGOPATH="$v"; sec_set ARGOPATH "$v"
   v="$(sec_get SUBTOKEN)"; [ -z "$v" ] && v=$(openssl rand -hex 8); SUBTOKEN="$v"; sec_set SUBTOKEN "$v"
+  v="$(sec_get NZUUID)"; [ -z "$v" ] && v=$(cat /proc/sys/kernel/random/uuid); NZUUID="$v"; sec_set NZUUID "$v"
   SNI="${SNI:-www.bing.com}"
   RSNI="${RSNI:-www.microsoft.com}"
   if [ -n "$VLRT" ]; then
@@ -89,12 +91,14 @@ load_saved() {
   SOCKUSER=$(sec_get SOCKUSER); SOCKPWD=$(sec_get SOCKPWD)
   WSPATH=$(sec_get WSPATH); ARGOPATH=$(sec_get ARGOPATH); SUBTOKEN=$(sec_get SUBTOKEN)
   RPUB=$(sec_get RPUB); SID=$(sec_get SID)
+  NZ_SERVER=$(sec_get NZ_SERVER); NZ_KEY=$(sec_get NZ_KEY); NZ_TLS=$(sec_get NZ_TLS); NZUUID=$(sec_get NZUUID)
 }
 
 save_form() {
   sec_set HYPT "$HYPT"; sec_set VLRT "$VLRT"; sec_set TUPT "$TUPT"; sec_set ANYPT "$ANYPT"
   sec_set WSCDN "$WSCDN"; sec_set WSDOMAIN "$WSDOMAIN"; sec_set SOCKPT "$SOCKPT"; sec_set SUBPT "$SUBPT"
   sec_set ARGO "$ARGO"; sec_set SNI "$SNI"; sec_set RSNI "$RSNI"
+  sec_set NZ_SERVER "$NZ_SERVER"; sec_set NZ_TLS "$NZ_TLS"
 }
 
 # ---------- 本体下载 ----------
@@ -125,6 +129,55 @@ install_cloudflared() {
     || { err "cloudflared 下载失败"; return 1; }
   chmod +x "$CF_BIN"
   ok "cloudflared 已就绪"
+}
+
+# ---------- 哪吒探针 ----------
+install_nezha() {
+  if [ -x "$SB_DIR/nezha-agent" ]; then return 0; fi
+  local arch tmp
+  case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac
+  info "下载哪吒探针 nezha-agent (linux-${arch}) ..."
+  tmp=$(mktemp -d)
+  curl -sL --max-time 300 -o "$tmp/nz.zip" \
+    "https://github.com/nezhahq/agent/releases/latest/download/nezha-agent_linux_${arch}.zip" \
+    || { err "哪吒探针下载失败"; rm -rf "$tmp"; return 1; }
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -o -q "$tmp/nz.zip" -d "$tmp" || { err "哪吒探针解压失败"; rm -rf "$tmp"; return 1; }
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$tmp/nz.zip" "$tmp" \
+      || { err "哪吒探针解压失败"; rm -rf "$tmp"; return 1; }
+  else
+    err "没有 unzip 也没有 python3，解压不了哪吒探针"; rm -rf "$tmp"; return 1
+  fi
+  cp "$tmp/nezha-agent" "$SB_DIR/nezha-agent"
+  chmod +x "$SB_DIR/nezha-agent"; rm -rf "$tmp"
+  ok "哪吒探针已就绪"
+}
+
+start_nezha() {
+  [ -n "$NZ_SERVER" ] && [ -n "$NZ_KEY" ] || return 0
+  install_nezha || return 1
+  local tls="false"
+  [ "$NZ_TLS" = "1" ] && tls="true"
+  cat > "$SB_DIR/nezha.yml" <<EOF
+debug: false
+server: $NZ_SERVER
+client_secret: $NZ_KEY
+tls: $tls
+uuid: $NZUUID
+report_delay: 3
+EOF
+  chmod 600 "$SB_DIR/nezha.yml" 2>/dev/null
+  if has_systemd; then
+    _unit sb-nezha "nezha agent (sb.sh)" "$SB_DIR/nezha-agent -c $SB_DIR/nezha.yml"
+    sleep 1
+    systemctl is-active --quiet sb-nezha && ok "哪吒探针已启动（面板 $NZ_SERVER）" || warn "哪吒探针启动异常，查 journalctl -u sb-nezha"
+  else
+    _kill_pid nezha
+    _run_bg nezha "$SB_DIR/nezha-agent -c $SB_DIR/nezha.yml"
+    sleep 1
+    _pid_alive nezha && ok "哪吒探针已启动（面板 $NZ_SERVER）" || warn "哪吒探针启动异常，看 $SB_DIR/nezha.log"
+  fi
 }
 
 gen_cert() {
@@ -395,14 +448,15 @@ start_sub() {
 
 stop_all() {
   if has_systemd; then
-    systemctl stop sb-panel sb-argo sb-sub 2>/dev/null
-    systemctl disable sb-panel sb-argo sb-sub >/dev/null 2>&1
+    systemctl stop sb-panel sb-argo sb-sub sb-nezha 2>/dev/null
+    systemctl disable sb-panel sb-argo sb-sub sb-nezha >/dev/null 2>&1
   fi
-  _kill_pid main; _kill_pid argo; _kill_pid sub
+  _kill_pid main; _kill_pid argo; _kill_pid sub; _kill_pid nezha
   local p
   p=$(pgrep -f "sing-box run -c $SB_DIR/config.json" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
   p=$(pgrep -f "$SB_DIR/cloudflared tunnel" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
   p=$(pgrep -f "sub_server.py $SUBPT" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
+  p=$(pgrep -f "$SB_DIR/nezha-agent" 2>/dev/null); [ -n "$p" ] && kill $p 2>/dev/null
   ok "全部服务已停止"
 }
 
@@ -442,10 +496,12 @@ do_install() {
   gen_cert || { err "证书生成失败"; exit 1; }
   save_form
   [ -n "$REPORT" ] && sec_set REPORT "$REPORT"
+  [ -n "$NZ_KEY" ] && sec_set NZ_KEY "$NZ_KEY"
   if ! build_config; then err "配置校验未通过"; exit 1; fi
   stop_all >/dev/null 2>&1
   start_singbox || exit 1
   start_argo
+  start_nezha
   echo
   ok "分享链接（已存 $SB_DIR/links.txt）："
   build_links
@@ -467,6 +523,7 @@ do_list() {
   load_saved
   REPORT=$(sec_get REPORT)
   echo "sing-box：$(main_running && echo 运行中 || echo 已停止)"
+  [ -n "$NZ_SERVER" ] && echo "哪吒探针：面板 $NZ_SERVER"
   [ -n "$ARGO" ] && echo "Argo 隧道域名：${ARGODOMAIN:-未获取}"
   echo "分享链接："
   build_links
@@ -478,11 +535,11 @@ case "$ACTION" in
   list) do_list ;;
   start)
     load_saved
-    start_singbox; start_argo
+    start_singbox; start_argo; start_nezha
     [ -n "$SUBPT" ] && { make_sub; start_sub; }
     ;;
   stop) stop_all ;;
-  restart) load_saved; stop_all; start_singbox; start_argo; [ -n "$SUBPT" ] && start_sub ;;
+  restart) load_saved; stop_all; start_singbox; start_argo; start_nezha; [ -n "$SUBPT" ] && start_sub ;;
   status)
     echo "sing-box：$(main_running && echo 运行中 || echo 已停止)"
     tail -5 "$SB_DIR/main.log" 2>/dev/null || journalctl -u sb-panel --no-pager -n 5 2>/dev/null
@@ -490,7 +547,7 @@ case "$ACTION" in
   del)
     stop_all
     if has_systemd; then
-      rm -f /etc/systemd/system/sb-panel.service /etc/systemd/system/sb-argo.service /etc/systemd/system/sb-sub.service
+      rm -f /etc/systemd/system/sb-panel.service /etc/systemd/system/sb-argo.service /etc/systemd/system/sb-sub.service /etc/systemd/system/sb-nezha.service
       systemctl daemon-reload 2>/dev/null
     fi
     rm -rf "$SB_DIR"
